@@ -40,7 +40,7 @@ public enum GTIN {
     /// The code as Open Food Facts keys it: UPC-A's 12 digits become EAN-13 with
     /// a leading zero (the service does the same: 041196910759 answers as
     /// 0041196910759). Throws for anything that is not a valid code.
-    public static func normalized(_ text: String) throws -> String {
+    public static func normalized(_ text: String) throws(OpenFoodFactsError) -> String {
         let code = cleaned(text)
         guard !code.isEmpty, code.allSatisfy({ $0.isASCII && $0.isNumber }) else {
             throw OpenFoodFactsError.invalidBarcode("'\(text)' has characters other than digits")

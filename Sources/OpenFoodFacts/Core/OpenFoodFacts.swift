@@ -73,14 +73,15 @@ public struct OpenFoodFacts: Sendable {
     /// - Returns: The product, or `nil` when the database has no record of it.
     /// - Throws: ``OpenFoodFactsError/invalidBarcode(_:)`` before any request
     ///   for text that cannot be a barcode, including a wrong check digit.
-    public func product(barcode: String) async throws -> FoodProduct? {
+    public func product(barcode: String) async throws(OpenFoodFactsError) -> FoodProduct? {
         let code = try GTIN.normalized(barcode)
         let data: Data
-        do { data = try await perform(URLs.product(barcode: code, language: language)) }
+        do throws(OpenFoodFactsError) { data = try await perform(URLs.product(barcode: code, language: language)) }
         // An unknown code answers HTTP 404 with `status` 0 ("product not
         // found"); a code the service cannot key answers 200 with `status` 0.
         // Both are a miss.
-        catch OpenFoodFactsError.http(404) { return nil }
+        catch .http(404) { return nil }
+        catch { throw error }
         let envelope: ProductEnvelope
         do { envelope = try JSONDecoder().decode(ProductEnvelope.self, from: data) } catch {
             throw OpenFoodFactsError.malformed("product: \(error)")
@@ -101,7 +102,7 @@ public struct OpenFoodFacts: Sendable {
     /// - Returns: The page; empty when nothing matches
     /// - Throws: ``OpenFoodFactsError/invalidQuery(_:)`` for empty text, a page
     ///   size out of range, or a page past the service's 10,000-result ceiling
-    public func search(_ text: String, page: Int = 1, pageSize: Int = 20) async throws -> FoodSearchPage {
+    public func search(_ text: String, page: Int = 1, pageSize: Int = 20) async throws(OpenFoodFactsError) -> FoodSearchPage {
         let query = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else { throw OpenFoodFactsError.invalidQuery("the search text is empty") }
         guard (1...100).contains(pageSize) else { throw OpenFoodFactsError.invalidQuery("page size must be 1–100, not \(pageSize)") }
@@ -127,21 +128,33 @@ public struct OpenFoodFacts: Sendable {
     /// succession — an HTML body, no Retry-After — and were back within ten
     /// seconds. So a retry waits the service's Retry-After when it sends one
     /// (capped at ten seconds), else five.
-    func perform(_ url: URL, retriesLeft: Int = 2) async throws -> Data {
+    func perform(_ url: URL, retriesLeft: Int = 2) async throws(OpenFoodFactsError) -> Data {
         var request = URLRequest(url: url)
         request.setValue(userAgent, forHTTPHeaderField: "User-Agent")
         request.timeoutInterval = 20
-        let (data, response) = try await transport(request)
+        let data: Data, response: HTTPURLResponse
+        do { (data, response) = try await transport(request) } catch { throw Self.closed(error) }
         switch response.statusCode {
         case 200...299:
             return data
         case 429:
             let after = response.value(forHTTPHeaderField: "Retry-After").flatMap(Int.init)
             guard retriesLeft > 0 else { throw OpenFoodFactsError.rateLimited(retryAfter: after) }
-            try await sleeper(min(after ?? 5, 10))
+            do { try await sleeper(min(after ?? 5, 10)) } catch { throw Self.closed(error) }
             return try await perform(url, retriesLeft: retriesLeft - 1)
         default:
             throw OpenFoodFactsError.http(response.statusCode)
+        }
+    }
+
+    /// Any error from the injected transport or sleeper as the closed type the
+    /// public API throws.
+    static func closed(_ error: any Error) -> OpenFoodFactsError {
+        switch error {
+        case let error as OpenFoodFactsError: return error
+        case is CancellationError: return .cancelled
+        case let error as URLError where error.code == .cancelled: return .cancelled
+        default: return .network(error.localizedDescription)
         }
     }
 }

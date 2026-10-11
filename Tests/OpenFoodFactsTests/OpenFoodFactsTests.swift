@@ -20,19 +20,34 @@ final class OpenFoodFactsTests: XCTestCase {
         return try Data(contentsOf: url)
     }
 
-    /// A transport that answers from a script and records what was asked.
-    final class Script: @unchecked Sendable {
-        private let lock = NSLock()
+    /// What a scripted transport was asked, in order.
+    actor RequestLog {
         private(set) var requests: [URLRequest] = []
-        let answer: @Sendable (URLRequest) -> (Int, Data, [String: String])
 
-        init(_ answer: @escaping @Sendable (URLRequest) -> (Int, Data, [String: String])) { self.answer = answer }
+        /// Records a request and returns its 1-based position.
+        func record(_ request: URLRequest) -> Int {
+            requests.append(request)
+            return requests.count
+        }
+    }
 
-        private func record(_ request: URLRequest) { lock.lock(); requests.append(request); lock.unlock() }
+    /// A transport that answers from a script and records what was asked.
+    /// Sendable without help: immutable, and its one piece of state is an actor.
+    final class Script: Sendable {
+        let log = RequestLog()
+        let answer: @Sendable (URLRequest, Int) -> (Int, Data, [String: String])
 
-        func transport(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-            record(request)
-            let (code, data, headers) = answer(request)
+        init(_ answer: @escaping @Sendable (URLRequest, Int) -> (Int, Data, [String: String])) { self.answer = answer }
+
+        convenience init(_ answer: @escaping @Sendable (URLRequest) -> (Int, Data, [String: String])) {
+            self.init { request, _ in answer(request) }
+        }
+
+        var requests: [URLRequest] { get async { await log.requests } }
+
+        @Sendable func transport(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+            let call = await log.record(request)
+            let (code, data, headers) = answer(request, call)
             return (data, HTTPURLResponse(url: request.url!, statusCode: code, httpVersion: nil, headerFields: headers)!)
         }
     }
@@ -40,7 +55,7 @@ final class OpenFoodFactsTests: XCTestCase {
     /// A client answering every request with one recording.
     func client(_ name: String, status: Int = 200) throws -> (OpenFoodFacts, Script) {
         let data = try Self.recording(name)
-        let script = Script { _ in (status, data, [:]) }
+        let script = Script { (_: URLRequest) in (status, data, [:]) }
         return (OpenFoodFacts(transport: script.transport, sleeper: { _ in }), script)
     }
 
@@ -67,7 +82,8 @@ final class OpenFoodFactsTests: XCTestCase {
         XCTAssertEqual(nutrition.perServing?.energyKcal, 140)
         XCTAssertNotNil(product.imageURL)
         XCTAssertEqual(product.pageURL.absoluteString, "https://world.openfoodfacts.org/product/5449000000996")
-        let request = try XCTUnwrap(script.requests.first)
+        let first = await script.requests.first
+        let request = try XCTUnwrap(first)
         XCTAssertEqual(request.value(forHTTPHeaderField: "User-Agent"), OpenFoodFacts.defaultUserAgent)
         XCTAssertTrue(request.url!.absoluteString.contains("product_name_en"))
     }
@@ -100,7 +116,8 @@ final class OpenFoodFactsTests: XCTestCase {
             _ = try await food.product(barcode: "5449000000997")
             XCTFail("should have thrown")
         } catch OpenFoodFactsError.invalidBarcode {}
-        XCTAssertTrue(script.requests.isEmpty)
+        let sent = await script.requests
+        XCTAssertTrue(sent.isEmpty)
     }
 
     func testUPCAIsAskedForAsEAN13() async throws {
@@ -108,7 +125,8 @@ final class OpenFoodFactsTests: XCTestCase {
         let productFound = try await food.product(barcode: "041196910759")
         let product = try XCTUnwrap(productFound)
         XCTAssertEqual(product.barcode, "0041196910759")
-        XCTAssertTrue(script.requests[0].url!.path.hasSuffix("/0041196910759.json"))
+        let sent = await script.requests
+        XCTAssertTrue(sent[0].url!.path.hasSuffix("/0041196910759.json"))
         XCTAssertGreaterThan(product.ingredients?.count ?? 0, 600)   // a long list comes back whole
     }
 
@@ -143,7 +161,8 @@ final class OpenFoodFactsTests: XCTestCase {
         XCTAssertFalse(page.isTotalExact)
         XCTAssertFalse(page.products[0].brands.isEmpty)            // brands is an array here
         XCTAssertEqual(page.products[0].nutrition?.basis, .hundredMillilitres)  // "1 l", no unit field
-        let query = URLComponents(url: script.requests[0].url!, resolvingAgainstBaseURL: false)!.queryItems!
+        let sent = await script.requests
+        let query = URLComponents(url: sent[0].url!, resolvingAgainstBaseURL: false)!.queryItems!
         XCTAssertEqual(query.first { $0.name == "q" }?.value, #"oat milk \(barista\)"#)
     }
 
@@ -163,29 +182,30 @@ final class OpenFoodFactsTests: XCTestCase {
                 XCTFail("\(text) \(page) \(size)")
             } catch OpenFoodFactsError.invalidQuery {}
         }
-        XCTAssertTrue(script.requests.isEmpty)
+        let sent = await script.requests
+        XCTAssertTrue(sent.isEmpty)
     }
 
     // MARK: Failures
 
     func testRateLimitRetriesThenGivesUp() async throws {
-        let script = Script { _ in (429, Data(), ["Retry-After": "30"]) }
+        let script = Script { (_: URLRequest) in (429, Data(), ["Retry-After": "30"]) }
         let waits = Waits()
-        let food = OpenFoodFacts(transport: script.transport, sleeper: { waits.add($0) })
+        let food = OpenFoodFacts(transport: script.transport, sleeper: { await waits.add($0) })
         do {
             _ = try await food.product(barcode: "5449000000996")
             XCTFail("should have thrown")
         } catch OpenFoodFactsError.rateLimited(let after) {
             XCTAssertEqual(after, 30)
         }
-        XCTAssertEqual(script.requests.count, 3)
-        XCTAssertEqual(waits.all, [10, 10])                         // capped
+        let sent = await script.requests, waited = await waits.all
+        XCTAssertEqual(sent.count, 3)
+        XCTAssertEqual(waited, [10, 10])                            // capped
     }
 
     func testRateLimitRecovers() async throws {
         let data = try Self.recording("coca-cola")
-        let count = Counter()
-        let script = Script { _ in count.next() == 1 ? (429, Data(), [:]) : (200, data, [:]) }
+        let script = Script { _, call in call == 1 ? (429, Data(), [:]) : (200, data, [:]) }
         let food = OpenFoodFacts(transport: script.transport, sleeper: { _ in })
         let product = try await food.product(barcode: "5449000000996")
         XCTAssertNotNil(product)
@@ -194,7 +214,7 @@ final class OpenFoodFactsTests: XCTestCase {
     func testServerErrorAndGarbage() async throws {
         let (food, _) = try client("coca-cola", status: 503)
         do { _ = try await food.product(barcode: "5449000000996"); XCTFail() } catch OpenFoodFactsError.http(let code) { XCTAssertEqual(code, 503) }
-        let script = Script { _ in (200, Data("<html>".utf8), [:]) }
+        let script = Script { (_: URLRequest) in (200, Data("<html>".utf8), [:]) }
         let garbage = OpenFoodFacts(transport: script.transport)
         do { _ = try await garbage.product(barcode: "5449000000996"); XCTFail() } catch OpenFoodFactsError.malformed {}
     }
@@ -204,14 +224,16 @@ final class OpenFoodFactsTests: XCTestCase {
         XCTAssertEqual(OpenFoodFacts(language: "../x").language, "en")
     }
 
-    /// Thread-safe recorders for the closures above.
-    final class Waits: @unchecked Sendable {
-        private let lock = NSLock(); private var values: [Int] = []
-        func add(_ value: Int) { lock.lock(); values.append(value); lock.unlock() }
-        var all: [Int] { lock.lock(); defer { lock.unlock() }; return values }
+    func testTransportFailuresAreClosed() async throws {
+        let offline = OpenFoodFacts(transport: { _ in throw URLError(.notConnectedToInternet) })
+        do { _ = try await offline.product(barcode: "5449000000996"); XCTFail() } catch .network {}
+        let cancelled = OpenFoodFacts(transport: { _ in throw CancellationError() })
+        do { _ = try await cancelled.search("milk"); XCTFail() } catch .cancelled {}
     }
-    final class Counter: @unchecked Sendable {
-        private let lock = NSLock(); private var value = 0
-        func next() -> Int { lock.lock(); defer { lock.unlock() }; value += 1; return value }
+
+    /// The waits a sleeper was asked for.
+    actor Waits {
+        private(set) var all: [Int] = []
+        func add(_ value: Int) { all.append(value) }
     }
 }

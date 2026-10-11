@@ -25,6 +25,7 @@ let page = try await food.search("oat milk (barista)", pageSize: 10)
 - 🌍 **Localised where the database allows** — a product's `product_name` is in *its* main language (Nutella's is French, Coca-Cola's Spanish) and the service's `lc=` does not change that, so the client asks for `product_name_<language>` and `ingredients_text_<language>` too and falls back to the product's own
 - 🔎 **Search that means what it says** — the search service reads Lucene syntax, so "oat milk (barista)" found nothing until its brackets were escaped; the text is escaped, page sizes 1–100 are enforced, and a page past the service's 10,000-result ceiling is refused before it is sent
 - 🚦 **429s handled** — two retries, waiting the service's Retry-After when it sends one, else 5 s; then a typed `rateLimited` error
+- 🧱 **Typed throws** — `product` and `search` throw only `OpenFoodFactsError`; transport failures arrive as `.network`, cancellation as `.cancelled`
 - 🧩 **Tolerant of the data's shape** — `brands` is a string from one endpoint and an array from the other, `nova_group` a number or a numeric string; products are read as a JSON tree and mapped, so one odd record cannot fail a page
 
 ## Measured (2026-10-11, live)
@@ -43,11 +44,11 @@ The legacy `/cgi/search.pl` search answered 503 to 8 of 12 rapid requests on the
 
 ## Tests
 
-32 tests: check digits, UPC-E, tags, escaping, pack-size units and the nutriment reader offline; the client on real responses recorded 2026-10-11 (Coca-Cola, Nutella, a UPC-A soup with a 654-character ingredient list, an EAN-8, a miss, a record with no nutrition, one with no name, a search and an empty search); and four live tests that skip when the service is unreachable or rate-limiting.
+33 tests: check digits, UPC-E, tags, escaping, pack-size units and the nutriment reader offline; the client on real responses recorded 2026-10-11 (Coca-Cola, Nutella, a UPC-A soup with a 654-character ingredient list, an EAN-8, a miss, a record with no nutrition, one with no name, a search and an empty search); and four live tests that skip when the service is unreachable or rate-limiting.
 
 ## Requirements
 
-macOS 13+ / iOS 16+ / tvOS 16+ / watchOS 9+ / visionOS 1+, Swift 6. Foundation only.
+macOS 13+ / iOS 16+ / tvOS 16+ / watchOS 9+ / visionOS 1+. Swift 6.2 tools, Swift 6 language mode, `NonisolatedNonsendingByDefault` on; async/await only, every model `Sendable`. Foundation only.
 
 ## Data
 

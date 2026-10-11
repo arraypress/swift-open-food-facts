@@ -8,7 +8,7 @@
 import Foundation
 
 /// The search service's body.
-struct SearchEnvelope: Decodable {
+struct SearchEnvelope: Decodable, Sendable {
     let hits: [[String: JSONValue]]
     let count: Int?
     let is_count_exact: Bool?

@@ -19,6 +19,10 @@ public enum OpenFoodFactsError: Error, LocalizedError, Sendable, Equatable {
     case rateLimited(retryAfter: Int?)
     /// A response did not have the documented shape.
     case malformed(String)
+    /// The request never got an answer: offline, DNS, TLS, a timeout.
+    case network(String)
+    /// The task was cancelled while waiting.
+    case cancelled
 
     /// A sentence fragment naming the problem.
     public var errorDescription: String? {
@@ -29,6 +33,8 @@ public enum OpenFoodFactsError: Error, LocalizedError, Sendable, Equatable {
         case .rateLimited(let after):
             return "Open Food Facts is rate-limiting" + (after.map { " (retry after \($0)s)" } ?? "")
         case .malformed(let what): return "unexpected response shape: \(what)"
+        case .network(let why): return "could not reach Open Food Facts: \(why)"
+        case .cancelled: return "cancelled"
         }
     }
 }

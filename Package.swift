@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.2
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -12,7 +12,10 @@ let package = Package(
         .library(name: "OpenFoodFacts", targets: ["OpenFoodFacts"]),
     ],
     targets: [
-        .target(name: "OpenFoodFacts"),
+        .target(
+            name: "OpenFoodFacts",
+            swiftSettings: [.enableUpcomingFeature("NonisolatedNonsendingByDefault")]
+        ),
         .testTarget(name: "OpenFoodFactsTests", dependencies: ["OpenFoodFacts"], resources: [.copy("Recordings")]),
     ]
 )

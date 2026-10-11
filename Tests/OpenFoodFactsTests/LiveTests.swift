@@ -21,7 +21,7 @@ final class LiveTests: XCTestCase {
         do { return try await body() }
         catch OpenFoodFactsError.rateLimited { throw XCTSkip("Open Food Facts is rate-limiting") }
         catch OpenFoodFactsError.http(let code) where code >= 500 { throw XCTSkip("Open Food Facts answered \(code)") }
-        catch let error as URLError { throw XCTSkip("offline: \(error.code)") }
+        catch OpenFoodFactsError.network(let why) { throw XCTSkip("offline: \(why)") }
     }
 
     func testProductFound() async throws {
