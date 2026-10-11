@@ -114,5 +114,19 @@ final class SupportTests: XCTestCase {
         XCTAssertEqual(NutrientReading.nutrition(nutriments, quantityUnit: "L")?.basis, .hundredMillilitres)
         XCTAssertEqual(NutrientReading.nutrition(nutriments, quantityUnit: "g")?.basis, .hundredGrams)
         XCTAssertEqual(NutrientReading.nutrition(nutriments, quantityUnit: nil)?.basis, .hundredGrams)
+        // Search results carry no unit: the printed size decides.
+        XCTAssertEqual(NutrientReading.nutrition(nutriments, quantityUnit: nil, quantity: "1 l")?.basis, .hundredMillilitres)
+        XCTAssertEqual(NutrientReading.nutrition(nutriments, quantityUnit: "g", quantity: "1 l")?.basis, .hundredGrams)
+    }
+
+    func testUnitOfAPrintedPackSize() {
+        let cases: [(String, String?)] = [
+            ("1 l", "l"), ("330 ml", "ml"), ("6 x 330 ml", "ml"), ("1,5L", "l"), ("50 cl", "cl"),
+            ("12 fl oz (355 mL)", "ml"), ("12 fl. oz", "fl oz"), ("400 g e", "g"), ("1.2 kg", "kg"),
+            ("a bag", nil), ("", nil),
+        ]
+        for (text, unit) in cases { XCTAssertEqual(NutrientReading.unit(inQuantity: text), unit, text) }
+        XCTAssertTrue(NutrientReading.isVolume("fl oz"))
+        XCTAssertFalse(NutrientReading.isVolume("oz"))
     }
 }

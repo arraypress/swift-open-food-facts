@@ -142,6 +142,7 @@ final class OpenFoodFactsTests: XCTestCase {
         XCTAssertEqual(page.total, 10_000)
         XCTAssertFalse(page.isTotalExact)
         XCTAssertFalse(page.products[0].brands.isEmpty)            // brands is an array here
+        XCTAssertEqual(page.products[0].nutrition?.basis, .hundredMillilitres)  // "1 l", no unit field
         let query = URLComponents(url: script.requests[0].url!, resolvingAgainstBaseURL: false)!.queryItems!
         XCTAssertEqual(query.first { $0.name == "q" }?.value, #"oat milk \(barista\)"#)
     }
